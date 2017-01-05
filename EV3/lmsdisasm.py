@@ -26,6 +26,10 @@ from __future__ import print_function
 import argparse
 import os
 import sys
+import yaml
+import codecs
+import struct
+from cStringIO import StringIO
 from ctypes import *
 
 from lms2012 import *
@@ -95,8 +99,22 @@ def parse_object(infile, outfile, id):
     print("}", file=outfile)
     infile.seek(save_position)
 
+def parse_sysops(infile):
+    byte = infile.read(1)
+    if len(byte) == 0:
+        return None
+    op = SysOp(ord(byte))
+    params = []
+    for param in op.params:
+        params.append(parse_primpar(param, infile))
+
+    return "{0}({1})".format(op.name, ",".join(params))
+
 def parse_ops(infile, start, id):
-    op = Op(ord(infile.read(1)))
+    byte = infile.read(1)
+    if len(byte) == 0:
+        return None
+    op = Op(ord(byte))
     if op == Op.OBJECT_END:
         return None
     params = []
@@ -122,6 +140,20 @@ def parse_ops(infile, start, id):
         params.append("OFFSET{0}_{1}".format(id, infile.tell() - start + offset))
     return "{0}({1})".format(op.name, ",".join(params))
 
+def parse_primpar(sizecode, infile):
+    data = None
+    if sizecode == PRIMPAR_1_BYTE:
+        data = struct.unpack('B', infile.read(1))[0]
+    elif sizecode == PRIMPAR_2_BYTES:
+        data = struct.unpack('<H', infile.read(2))[0]
+    elif sizecode == PRIMPAR_4_BYTES:
+        data = struct.unpack('<L', infile.read(4))[0]
+    elif sizecode == PRIMPAR_STRING or sizecode == PRIMPAR_STRING_OLD:
+        return quote_string(parse_string(infile))
+    else:
+        raise ValueError("unexpected primpar {0}".format(sizecode))
+    return str(data)
+
 def parse_param(param, infile):
     first_byte = ord(infile.read(1))
     if first_byte & PRIMPAR_LONG:
@@ -131,19 +163,13 @@ def parse_param(param, infile):
             else:
                 scope = 'LOCAL'
             size = first_byte & PRIMPAR_BYTES
-            if size == PRIMPAR_1_BYTE:
-                data = Data8()
-            elif size == PRIMPAR_2_BYTES:
-                data = Data16()
-            elif size == PRIMPAR_4_BYTES:
-                data = Data32()
-            infile.readinto(data)
+            data = parse_primpar(size, infile)
             handle = ''
             if first_byte & PRIMPAR_HANDLE:
                 handle = '@'
             elif first_byte & PRIMPAR_ADDR:
                 raise NotImplementedError()
-            return "{0}{1}{2}".format(handle,scope,data.value)
+            return "{0}{1}{2}".format(handle,scope,data)
         else: # PRIMPAR_CONST
             if first_byte & PRIMPAR_LABEL:
                 return "LABEL{0}".format(ord(infile.read(1)))
@@ -151,26 +177,17 @@ def parse_param(param, infile):
             if param is Param.PARF:
                 if size != PRIMPAR_4_BYTES:
                     raise ValueError("Expecting float value")
-                data = DataFloat()
-                infile.readinto(data)
-                int_value = c_int.from_buffer(data).value
+                bytes = infile.read(4)
+                data = struct.unpack('f', bytes)[0]
+                int_value = struct.unpack('<L', bytes)[0]
                 if int_value == DATAF_MAX:
                     return "DATAF_MAX"
                 if int_value == DATAF_MIN:
                     return "DATAF_MIN"
                 if int_value == DATAF_NAN:
                     return "DATAF_NAN"
-                return str(data.value) + "F"
-            if size == PRIMPAR_STRING_OLD or size == PRIMPAR_STRING:
-                return parse_string(infile)
-            elif size == PRIMPAR_1_BYTE:
-                data = Data8()
-            elif size == PRIMPAR_2_BYTES:
-                data = Data16()
-            elif size == PRIMPAR_4_BYTES:
-                data = Data32()
-            infile.readinto(data)
-            return str(data.value)
+                return str(data) + "F"
+            return parse_primpar(size, infile)
     else:  # PRIMPAR_SHORT
         if first_byte & PRIMPAR_VARIABLE:
             if first_byte & PRIMPAR_GLOBAL:
@@ -187,7 +204,12 @@ def parse_param(param, infile):
     raise NotImpementedError("TODO")
 
 def parse_subparam(type, value, infile):
-    subcode_type = type.subcode_type(int(value))
+#    print("PARSE_SUBPARAM {0} {1}".format(repr(type), repr(value)))
+
+    try:
+        subcode_type = type.subcode_type(int(value))
+    except:
+        return "DAMMIT"
     params = [ subcode_type.name ]
     values = -1
     for param in subcode_type.params:
@@ -217,11 +239,79 @@ def parse_string(infile):
         if not ord(ch):
             break
         value += ch
+    return value
+
+def quote_string(value):
     value = value.replace("\t", "\\t")
     value = value.replace("\r", "\\r")
     value = value.replace("\n", "\\n")
     value = value.replace("'", "\\q")
     return "'{0}'".format(value)
+
+def u16(infile):
+    return ord(infile.read(1)) + 256 * ord(infile.read(1))
+
+def u8(infile):
+    return ord(infile.read(1))
+
+def parse_sent(infile):
+    size = u16(infile)
+    msgid = u16(infile)
+    type = u8(infile)
+    print("\t", "# MSG #{0}".format(msgid))
+
+    local_global = None
+    if type == 0x00 or type == 0x80: # direct command
+        local_global = u16(infile)
+        nlocal = local_global >> 10
+        nglobal = local_global & 0x3ff
+        print("\t", "# LOCAL: {0}, GLOBAL: {1}".format(nlocal, nglobal))
+
+        while True:
+            line = parse_ops(infile, 0, 42)
+            if not line:
+                break
+            print("\t", line)
+    elif type == 0x01 or type == 0x81: # system command
+        print("\t", "# SYSOP")
+        while True:
+            line = parse_sysops(infile)
+            if not line:
+                break
+            print("\t", line)
+    else:
+        print("\t", "# #{0}".format(type))
+
+def parse_received(infile):
+    size = u16(infile)
+    msgid = u16(infile)
+    type = u8(infile)
+    print("\t", "# FOR #{0}".format(msgid))
+    if type == 0x02:
+        print("\t", "# OK")
+    elif type == 0x04:
+        print("\t", "# ERROR")
+    else:
+        print("\t", "# unknown type")
+    parse_generic_reply(infile)
+
+def parse_generic_reply(infile):
+    bytes = infile.read(4)
+    data = struct.unpack('f', bytes)[0]
+    print("\t", "# FLOAT? {0}".format(data))
+
+def parse_communication(infile):
+    decode_hex = codecs.getdecoder("hex_codec")
+    serial_comm = yaml.load(infile)
+
+    for record in serial_comm:
+        data = decode_hex(record["hexdata"])[0]
+        print("DATA ", repr(data))
+        dfile = StringIO(data)
+        if record["sent"]:
+            parse_sent(dfile)
+        else:
+            parse_received(dfile)
 
 def main():
     parser = argparse.ArgumentParser(description='Disassemble lms2012 byte codes.')
@@ -229,7 +319,13 @@ def main():
                        help='The .rbf file to disassemble.')
     parser.add_argument('-o', '--output', type=argparse.FileType('wb', 0), default='-',
                        help='The .lms file that will contain the result.')
+    parser.add_argument('-e', '--escape', action='store_true',
+                       help='Do it better')
     args = parser.parse_args()
+
+    if args.escape:
+        parse_communication(args.input)
+        sys.exit(0)
 
     file_size = os.path.getsize(args.input.name)
     version, num_objs, global_bytes = parse_program_header(args.input, file_size)

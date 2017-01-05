@@ -1744,6 +1744,34 @@ PRIMPAR_4_BYTES      = 3
 PRIMPAR_STRING       = 4
 PRIMPAR_LABEL        = 0x20
 
+class SysOp(Enum):
+    BEGIN_DOWNLOAD            = 0x92
+    CONTINUE_DOWNLOAD         = 0x93
+    BEGIN_UPLOAD              = 0x94
+    CONTINUE_UPLOAD           = 0x95
+    BEGIN_GETFILE             = 0x96
+    CONTINUE_GETFILE          = 0x97
+    CLOSE_FILEHANDLE          = 0x98
+    LIST_FILES                = 0x99
+    CONTINUE_LIST_FILES       = 0x9A
+    CREATE_DIR                = 0x9B
+    DELETE_FILE               = 0x9C
+    LIST_OPEN_HANDLES         = 0x9D
+    WRITEMAILBOX              = 0x9E
+    BLUETOOTHPIN              = 0x9F
+    ENTERFWUPDATE             = 0xA0
+    SETBUNDLEID               = 0xA1
+    SETBUNDLESEEDID           = 0xA2
+
+    @property
+    def params(self):
+        return _sys_op_code_params[self]
+
+_sys_op_code_params = {
+    SysOp.LIST_FILES:        (PRIMPAR_2_BYTES, PRIMPAR_STRING),
+    # FIXME fill in the others
+}
+
 DIRECT_COMMAND_REPLY    = 0x00
 DIRECT_COMMAND_NO_REPLY = 0x80
 DIRECT_REPLY            = 0x02
