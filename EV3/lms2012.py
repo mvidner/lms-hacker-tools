@@ -1768,9 +1768,39 @@ class SysOp(Enum):
         return _sys_op_code_params[self]
 
 _sys_op_code_params = {
-    SysOp.LIST_FILES:        (PRIMPAR_2_BYTES, PRIMPAR_STRING),
-    # FIXME fill in the others
+    SysOp.BEGIN_DOWNLOAD:      (PRIMPAR_4_BYTES, PRIMPAR_STRING),
+    SysOp.CONTINUE_DOWNLOAD:   (PRIMPAR_1_BYTE,), # plus payload
+    SysOp.BEGIN_UPLOAD:        (PRIMPAR_2_BYTES, PRIMPAR_STRING),
+    SysOp.CONTINUE_UPLOAD:     (PRIMPAR_1_BYTE,), # plus payload
+    SysOp.BEGIN_GETFILE:       (PRIMPAR_2_BYTES, PRIMPAR_STRING),
+    SysOp.CONTINUE_GETFILE:    (PRIMPAR_1_BYTE,), # plus payload
+    SysOp.CLOSE_FILEHANDLE:    (PRIMPAR_1_BYTE,), # plus hash
+    SysOp.LIST_FILES:          (PRIMPAR_2_BYTES, PRIMPAR_STRING),
+    SysOp.CONTINUE_LIST_FILES: (PRIMPAR_1_BYTE, PRIMPAR_2_BYTES),
+    SysOp.CREATE_DIR:          (PRIMPAR_STRING,),
+    SysOp.DELETE_FILE:         (PRIMPAR_STRING,),
+    SysOp.LIST_OPEN_HANDLES:   (),
+    SysOp.WRITEMAILBOX:        (), # FIXME p8string, p16string
+    SysOp.BLUETOOTHPIN:        (), # FIXME p8string, p8string
+    SysOp.ENTERFWUPDATE:       (),
+    SysOp.SETBUNDLEID:         (), # FIXME
+    SysOp.SETBUNDLESEEDID:     (), # FIXME
 }
+
+class SysOpReturn(Enum):
+    SUCCESS              = 0x00
+    UNKNOWN_HANDLE       = 0x01
+    HANDLE_NOT_READY     = 0x02
+    CORRUPT_FILE         = 0x03
+    NO_HANDLES_AVAILABLE = 0x04
+    NO_PERMISSION        = 0x05
+    ILLEGAL_PATH         = 0x06
+    FILE_EXITS           = 0x07
+    END_OF_FILE          = 0x08
+    SIZE_ERROR           = 0x09
+    UNKNOWN_ERROR        = 0x0A
+    ILLEGAL_FILENAME     = 0x0B
+    ILLEGAL_CONNECTION   = 0x0C
 
 DIRECT_COMMAND_REPLY    = 0x00
 DIRECT_COMMAND_NO_REPLY = 0x80

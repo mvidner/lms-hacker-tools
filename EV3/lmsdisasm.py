@@ -29,6 +29,7 @@ import sys
 import yaml
 import codecs
 import struct
+import re
 from cStringIO import StringIO
 from ctypes import *
 
@@ -100,6 +101,8 @@ def parse_object(infile, outfile, id):
     infile.seek(save_position)
 
 def parse_sysops(infile):
+    global filename
+
     byte = infile.read(1)
     if len(byte) == 0:
         return None
@@ -107,6 +110,17 @@ def parse_sysops(infile):
     params = []
     for param in op.params:
         params.append(parse_primpar(param, infile))
+
+    # HACK: dump the uploaded file
+    if op == SysOp.BEGIN_DOWNLOAD:
+        path = params[1][1:-1]  # strip quotes
+        _dir, filename = os.path.split(path)
+        os.remove(filename)
+    elif op == SysOp.CONTINUE_DOWNLOAD:
+        data = infile.read()
+        print("DUMPING {0} bytes to {1}".format(len(data), filename))
+        with open(filename, "ab") as f:
+            f.write(bytearray(data))
 
     return "{0}({1})".format(op.name, ",".join(params))
 
@@ -254,8 +268,11 @@ def u16(infile):
 def u8(infile):
     return ord(infile.read(1))
 
-def parse_sent(infile):
+def parse_sent(infile, actual_size):
     size = u16(infile)
+    if size != actual_size - 2:
+        print("\t", "# INCOMPLETE packet, ignoring. read {0} remaining {1}".format(size, actual_size - 2))
+        return False
     msgid = u16(infile)
     type = u8(infile)
     print("\t", "# MSG #{0}".format(msgid))
@@ -274,42 +291,65 @@ def parse_sent(infile):
             print("\t", line)
     elif type == 0x01 or type == 0x81: # system command
         print("\t", "# SYSOP")
-        while True:
-            line = parse_sysops(infile)
-            if not line:
-                break
-            print("\t", line)
+        # one only, to allow for arbitrary payload
+        line = parse_sysops(infile)
+        print("\t", line)
+#        while True:
+#            line = parse_sysops(infile)
+#            if not line:
+#                break
+#            print("\t", line)
     else:
         print("\t", "# #{0}".format(type))
+
+    return True
 
 def parse_received(infile):
     size = u16(infile)
     msgid = u16(infile)
     type = u8(infile)
     print("\t", "# FOR #{0}".format(msgid))
-    if type == 0x02:
+    if type == DIRECT_REPLY:
         print("\t", "# OK")
-    elif type == 0x04:
+        parse_generic_reply(infile)
+    elif type == SYSTEM_REPLY:
+        print("\t", "# SYSTEM OK")
+        parse_system_reply(infile)
+    elif type == DIRECT_REPLY_ERROR:
         print("\t", "# ERROR")
+        parse_generic_reply(infile)
+    elif type == SYSTEM_REPLY_ERROR:
+        print("\t", "# SYSTEM ERROR")
+        parse_system_reply(infile)
     else:
         print("\t", "# unknown type")
-    parse_generic_reply(infile)
 
 def parse_generic_reply(infile):
     bytes = infile.read(4)
     data = struct.unpack('f', bytes)[0]
     print("\t", "# FLOAT? {0}".format(data))
 
+def parse_system_reply(infile):
+    to_command = SysOp(u8(infile))
+    status = SysOpReturn(u8(infile))
+    print("\t", "# cmd was {0}, status {1}".format(to_command, status))
+
 def parse_communication(infile):
     decode_hex = codecs.getdecoder("hex_codec")
     serial_comm = yaml.load(infile)
 
+    buffer = ""                 # sent data that was not complete the last time
     for record in serial_comm:
-        data = decode_hex(record["hexdata"])[0]
-        print("DATA ", repr(data))
-        dfile = StringIO(data)
+        hexdata = record["hexdata"]
+        print("DATA ", " ".join(re.findall("..", hexdata)))
+        data = decode_hex(hexdata)[0]
+        dfile = StringIO(buffer + data)
         if record["sent"]:
-            parse_sent(dfile)
+            done = parse_sent(dfile, len(buffer + data))
+            if done:
+                buffer = ""
+            else:
+                buffer = data
         else:
             parse_received(dfile)
 
