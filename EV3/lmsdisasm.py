@@ -149,7 +149,10 @@ def parse_ops(infile, start, id):
                 params.append(parse_param(Param.PARV, infile))
     # special handling for jump ops
     if op.name[:2] == "JR":
-        offset = int(params[-1])
+        offset32 = int(params[-1])
+        offset = offset32 % 65536
+        if offset >= 32768:
+            offset -= 65536
         del params[-1]
         params.append("OFFSET{0}_{1}".format(id, infile.tell() - start + offset))
     return "{0}({1})".format(op.name, ",".join(params))
