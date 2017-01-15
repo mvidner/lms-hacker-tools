@@ -115,7 +115,10 @@ def parse_sysops(infile):
     if op == SysOp.BEGIN_DOWNLOAD:
         path = params[1][1:-1]  # strip quotes
         _dir, filename = os.path.split(path)
-        os.remove(filename)
+        try:
+            os.remove(filename)
+        except OSError:
+            pass
     elif op == SysOp.CONTINUE_DOWNLOAD:
         data = infile.read()
         print("DUMPING {0} bytes to {1}".format(len(data), filename))
@@ -274,7 +277,7 @@ def u8(infile):
 def parse_sent(infile, actual_size):
     size = u16(infile)
     if size != actual_size - 2:
-        print("\t", "# INCOMPLETE packet, ignoring. read {0} remaining {1}".format(size, actual_size - 2))
+        print("\t", "# INCOMPLETE packet, ignoring. wanted {0} actual {1}".format(size, actual_size - 2))
         return False
     msgid = u16(infile)
     type = u8(infile)
