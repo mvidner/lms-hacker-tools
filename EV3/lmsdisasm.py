@@ -269,22 +269,40 @@ def quote_string(value):
     return "'{0}'".format(value)
 
 def u16(infile):
-    return ord(infile.read(1)) + 256 * ord(infile.read(1))
+    lo = infile.read(1)
+    if len(lo) == 0:
+        return None
+    hi = infile.read(1)
+    if len(hi) == 0:
+        return None
+    return ord(lo) + 256 * ord(hi)
 
 def u8(infile):
     return ord(infile.read(1))
 
-def parse_sent(infile, actual_size):
+# A FRAME is
+# 2 bytes: size of the message, 16 bit little endian
+# size bytes: message
+#
+# A MESSAGE is
+# 2 bytes: message id, 16 bit little endian
+# 1 byte:  message type
+# rest:    type specific
+
+def parse_frame(infile, actual_size):
     size = u16(infile)
     if size != actual_size - 2:
         print("\t", "# INCOMPLETE packet, ignoring. wanted {0} actual {1}".format(size, actual_size - 2))
         return False
+    parse_message(infile)
+    return True
+
+def parse_message(infile):
     msgid = u16(infile)
     type = u8(infile)
-    print("\t", "# MSG #{0}".format(msgid))
 
-    local_global = None
     if type == 0x00 or type == 0x80: # direct command
+        print("\t", "# MSG #{0}".format(msgid))
         local_global = u16(infile)
         nlocal = local_global >> 10
         nglobal = local_global & 0x3ff
@@ -296,6 +314,7 @@ def parse_sent(infile, actual_size):
                 break
             print("\t", line)
     elif type == 0x01 or type == 0x81: # system command
+        print("\t", "# MSG #{0}".format(msgid))
         print("\t", "# SYSOP")
         # one only, to allow for arbitrary payload
         line = parse_sysops(infile)
@@ -305,30 +324,24 @@ def parse_sent(infile, actual_size):
 #            if not line:
 #                break
 #            print("\t", line)
-    else:
-        print("\t", "# #{0}".format(type))
-
-    return True
-
-def parse_received(infile):
-    size = u16(infile)
-    msgid = u16(infile)
-    type = u8(infile)
-    print("\t", "# FOR #{0}".format(msgid))
-    if type == DIRECT_REPLY:
+    elif type == DIRECT_REPLY:
+        print("\t", "# FOR #{0}".format(msgid))
         print("\t", "# OK")
         parse_generic_reply(infile)
     elif type == SYSTEM_REPLY:
+        print("\t", "# FOR #{0}".format(msgid))
         print("\t", "# SYSTEM OK")
         parse_system_reply(infile)
     elif type == DIRECT_REPLY_ERROR:
+        print("\t", "# FOR #{0}".format(msgid))
         print("\t", "# ERROR")
         parse_generic_reply(infile)
     elif type == SYSTEM_REPLY_ERROR:
+        print("\t", "# FOR #{0}".format(msgid))
         print("\t", "# SYSTEM ERROR")
         parse_system_reply(infile)
     else:
-        print("\t", "# unknown type")
+        print("\t", "# unknown type #{0}".format(type))
 
 def parse_generic_reply(infile):
     bytes = infile.read(4)
@@ -340,7 +353,15 @@ def parse_system_reply(infile):
     status = SysOpReturn(u8(infile))
     print("\t", "# cmd was {0}, status {1}".format(to_command, status))
 
-def parse_communication(infile):
+def parse_blob_communication(infile):
+    while True:
+        frame_size = u16(infile)
+        if not frame_size:
+            break
+        message = infile.read(frame_size)
+        parse_message(StringIO(message))
+
+def parse_yaml_communication(infile):
     decode_hex = codecs.getdecoder("hex_codec")
     serial_comm = yaml.load(infile)
 
@@ -350,14 +371,11 @@ def parse_communication(infile):
         print("DATA ", " ".join(re.findall("..", hexdata)))
         data = decode_hex(hexdata)[0]
         dfile = StringIO(buffer + data)
-        if record["sent"]:
-            done = parse_sent(dfile, len(buffer + data))
-            if done:
-                buffer = ""
-            else:
-                buffer = data
+        done = parse_frame(dfile, len(buffer + data))
+        if done:
+            buffer = ""
         else:
-            parse_received(dfile)
+            buffer = data
 
 def main():
     parser = argparse.ArgumentParser(description='Disassemble lms2012 byte codes.')
@@ -365,12 +383,18 @@ def main():
                        help='The .rbf file to disassemble.')
     parser.add_argument('-o', '--output', type=argparse.FileType('wb', 0), default='-',
                        help='The .lms file that will contain the result.')
-    parser.add_argument('-e', '--escape', action='store_true',
-                       help='Do it better')
+    parser.add_argument('-y', '--yaml', action='store_true',
+                       help='Decode YAML serial communication')
+    parser.add_argument('-b', '--blob', action='store_true',
+                       help='Decode blob serial communication')
     args = parser.parse_args()
 
-    if args.escape:
-        parse_communication(args.input)
+    if args.yaml:
+        parse_yaml_communication(args.input)
+        sys.exit(0)
+
+    if args.blob:
+        parse_blob_communication(args.input)
         sys.exit(0)
 
     file_size = os.path.getsize(args.input.name)
